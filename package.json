@@ -1,7 +1,7 @@
 {
   "name": "ingest-lambda",
   "version": "1.0.0",
-  "description": "Lambda de ingesta para el sistema de interoperabilidad SGSSS",
+  "description": "Ingest Lambda for SGSSS Federated Interoperability System",
   "main": "src/handlers/ingest.js",
   "type": "module",
   "scripts": {
@@ -10,17 +10,17 @@
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
   },
   "engines": {
-    "node": ">=18.x"
+    "node": ">=22.x"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "*",
-    "@aws-sdk/client-s3": "*",
-    "@aws-sdk/client-sqs": "*",
-    "@aws-sdk/lib-dynamodb": "*",
-    "ulid": "*"
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/client-sqs": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "ulid": "^2.3.0"
   },
   "devDependencies": {
-    "@jest/globals": "*",
-    "jest": "*"
+    "@jest/globals": "^29.7.0",
+    "jest": "^29.7.0"
   }
 }

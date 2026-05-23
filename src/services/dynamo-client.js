@@ -67,7 +67,7 @@ export async function updateTrasladoEstado(trasladoId, nuevoEstado, extras = {})
 
   await docClient.send(new UpdateCommand({
     TableName: TABLE_NAME,
-    Key: { traslado_id: trasladoId },
+    Key: { transfersid: trasladoId },
     UpdateExpression: `SET ${updateParts.join(', ')}`,
     ExpressionAttributeNames: expressionNames,
     ExpressionAttributeValues: expressionValues,

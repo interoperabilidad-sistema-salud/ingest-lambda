@@ -79,7 +79,7 @@ describe('extractBundleMetadata', () => {
 
   it('debe extraer el epsOrigenId correctamente', () => {
     const metadata = extractBundleMetadata(validBundle);
-    expect(metadata.sourceEpsId).toBe('EPS001');
+    expect(metadata.epsOrigenId).toBe('EPS001');
   });
 
   it('debe devolver null si no hay Patient en las entries', () => {
