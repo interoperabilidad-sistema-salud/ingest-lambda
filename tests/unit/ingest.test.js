@@ -85,8 +85,9 @@ describe('Lambda Ingest — handler', () => {
     const response = await handler(makeEvent(), makeContext());
     expect(response.statusCode).toBe(202);
     const body = JSON.parse(response.body);
-    expect(body.estado).toBe('EN_COLA');
-    expect(body.traslado_id).toBeDefined();
+    console.log(body);
+    expect(body.status).toBe('EN_COLA');
+    expect(body.transfer_id).toBeDefined();
   });
 
   // ❌ Body vacío

@@ -14,15 +14,15 @@ import {
 export const handler = async (event, context) => {
   const correlationId = context.awsRequestId;
 
-  logger.info('Inicio de procesamiento de traslado', { correlationId });
+  logger.info('Transfer processing started', { correlationId });
 
-  // Verificar modo mantenimiento
+  // Check maintenance mode
   if (process.env.MODO_MANTENIMIENTO === 'true') {
-    logger.warn('Sistema en modo mantenimiento', { correlationId });
+    logger.warn('System is under maintenance', { correlationId });
     return serviceUnavailableResponse();
   }
 
-  // Parsear el body
+  // Parse request body
   let payload;
   try {
     const rawBody = event.body;
@@ -31,39 +31,39 @@ export const handler = async (event, context) => {
     }
     payload = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
   } catch {
-    logger.warn('Body del request no es JSON válido', { correlationId });
+    logger.warn('Request body is not valid JSON', { correlationId });
     return validationErrorResponse('El body debe ser JSON válido');
   }
 
-  // Extraer EPS destino del header
+  // Extract destination EPS from header
   const epsDestino = event.headers?.['x-eps-destino'] ?? event.headers?.['X-EPS-Destino'];
   if (!epsDestino) {
     return validationErrorResponse('El header X-EPS-Destino es requerido');
   }
 
-  // Extraer EPS origen
+  // Extract source EPS
   const epsOrigen = event.requestContext?.authorizer?.epsId
     ?? event.headers?.['x-eps-origen']
-    ?? 'EPS_ORIGEN_NO_IDENTIFICADA';
+    ?? 'EPS_SOURCE_UNIDENTIFIED';
 
-  // Validar el Bundle FHIR R4
+  // Validate FHIR R4 Bundle
   const strictValidation = process.env.FHIR_STRICT_VALIDATION !== 'false';
   const validationResult = validateFhirBundle(payload);
 
   if (!validationResult.valid && strictValidation) {
-    logger.warn('Bundle FHIR inválido', {
+    logger.warn('Invalid FHIR Bundle received', {
       correlationId,
       epsOrigen,
-      errores: validationResult.errors,
+      errors: validationResult.errors,
     });
     return validationErrorResponse('Bundle FHIR R4 inválido', validationResult.errors);
   }
 
-  // Generar ID único del traslado
+  // Generate unique transfer ID
   const trasladoId = ulid();
   const bundleMetadata = extractBundleMetadata(payload);
 
-  logger.info('Bundle FHIR validado, iniciando registro', {
+  logger.info('FHIR Bundle validated, starting registration', {
     correlationId,
     trasladoId,
     epsOrigen,
@@ -72,11 +72,11 @@ export const handler = async (event, context) => {
   });
 
   try {
-    // Guardar evidencia en S3
+    // Save evidence to S3
     const { s3Key, payloadHash } = await saveEvidenceToS3(trasladoId, epsOrigen, payload);
-    logger.info('Evidencia guardada en S3', { correlationId, trasladoId, s3Key });
+    logger.info('Evidence saved to S3', { correlationId, trasladoId, s3Key });
 
-    // Registrar en DynamoDB
+    // Register in DynamoDB
     await createTrasladoRecord({
       trasladoId,
       epsOrigen,
@@ -85,9 +85,9 @@ export const handler = async (event, context) => {
       payloadHash,
       s3EvidenceKey: s3Key,
     });
-    logger.info('Traslado registrado en DynamoDB', { correlationId, trasladoId });
+    logger.info('Transfer registered in DynamoDB', { correlationId, trasladoId });
 
-    // Publicar en SQS
+    // Publish to SQS for async delivery
     const messageId = await publishTrasladoToQueue({
       trasladoId,
       epsOrigen,
@@ -96,23 +96,23 @@ export const handler = async (event, context) => {
       payloadHash,
     });
 
-    // Actualizar estado a EN_COLA
+    // Update status to queued
     await updateTrasladoEstado(trasladoId, TRASLADO_ESTADOS.EN_COLA, {
       sqs_message_id: messageId,
     });
 
-    logger.info('Traslado encolado exitosamente', { correlationId, trasladoId, messageId });
+    logger.info('Transfer successfully queued', { correlationId, trasladoId, messageId });
 
-    // Responder a la EPS origen
+    // Respond to source EPS
     return successResponse({
-      traslado_id: trasladoId,
-      estado: TRASLADO_ESTADOS.EN_COLA,
-      mensaje: 'Historia clínica recibida y en proceso de entrega',
+      transfer_id: trasladoId,
+      status: TRASLADO_ESTADOS.EN_COLA,
+      message: 'Historia clínica recibida y en proceso de entrega',
       timestamp: new Date().toISOString(),
     });
 
   } catch (error) {
-    logger.error('Error procesando traslado', {
+    logger.error('Error processing transfer', {
       correlationId,
       trasladoId,
       errorMessage: error.message,

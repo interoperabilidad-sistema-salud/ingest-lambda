@@ -23,7 +23,7 @@ export function validateFhirBundle(payload) {
   } else {
     payload.entry.forEach((entry, index) => {
       if (!entry.resource) {
-        errors.push(`entry[${index}] no tiene campo "resource"`);
+        errors.push(`entry[${index}] no tiene el campo "resource"`);
       } else if (!entry.resource.resourceType) {
         errors.push(`entry[${index}].resource no tiene "resourceType"`);
       }
@@ -51,11 +51,11 @@ export function extractBundleMetadata(bundle) {
   const patientId = patientEntry?.resource?.id ?? null;
 
   const compositionEntry = bundle.entry?.find((e) => e.resource?.resourceType === 'Composition');
-  const epsOrigenId = compositionEntry?.resource?.author?.[0]?.identifier?.value ?? null;
+  const sourceEpsId = compositionEntry?.resource?.author?.[0]?.identifier?.value ?? null;
 
   return {
     patientId,
-    epsOrigenId,
+    sourceEpsId,
     bundleTimestamp: bundle.timestamp ?? bundle.meta?.lastUpdated ?? new Date().toISOString(),
   };
 }
