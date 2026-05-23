@@ -1,0 +1,50 @@
+name: CI — Lambda Ingest (Staging)
+
+on:
+  push:
+    branches: [staging]
+  pull_request:
+    branches: [staging]
+
+env:
+  ARTIFACT_BUCKET: interoperabilidad-sistema-salud
+  LAMBDA_NAME: lambda-ingest
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run coverage:check
+      - run: npm run security:check
+      - run: npm run build
+      - run: ls -la dist/lambda-ingest.zip
+
+  publish:
+    needs: test-and-build
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci && npm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Subir .zip a S3 (staging) — SIMULADO
+        run: |
+          echo "aws s3 cp dist/lambda-ingest.zip \\"
+          echo "s3://${{ env.ARTIFACT_BUCKET }}/lambda-ingest/latest.zip"
+          echo "✅ lambda-ingest.zip subido a staging (simulado)"

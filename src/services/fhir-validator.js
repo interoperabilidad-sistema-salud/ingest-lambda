@@ -23,7 +23,7 @@ export function validateFhirBundle(payload) {
   } else {
     payload.entry.forEach((entry, index) => {
       if (!entry.resource) {
-        errors.push(`entry[${index}] no tiene campo "resource"`);
+        errors.push(`entry[${index}] no tiene el campo "resource"`);
       } else if (!entry.resource.resourceType) {
         errors.push(`entry[${index}].resource no tiene "resourceType"`);
       }

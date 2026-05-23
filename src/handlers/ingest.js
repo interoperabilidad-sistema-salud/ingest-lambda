@@ -1,6 +1,6 @@
-import { ulid } from 'ulid';
+import { ulid } from 'ulidx';
 import { validateFhirBundle, extractBundleMetadata } from '../services/fhir-validator.js';
-import { createTrasladoRecord, updateTrasladoEstado, TRASLADO_ESTADOS } from '../services/dynamo-client.js';
+import { saveAuditRecord, AUDIT_STATUS } from '../services/dynamo-client.js';
 import { saveEvidenceToS3 } from '../services/s3-client.js';
 import { publishTrasladoToQueue } from '../services/sqs-client.js';
 import { logger } from '../utils/logger.js';
@@ -11,18 +11,54 @@ import {
   serviceUnavailableResponse,
 } from '../utils/response-helper.js';
 
+const getQueueName = () => {
+  const url = process.env.SQS_DELIVERY_QUEUE_URL ?? '';
+  return url.split('/').filter(Boolean).pop() ?? '';
+};
+
 export const handler = async (event, context) => {
   const correlationId = context.awsRequestId;
+  const receivedAt = new Date().toISOString();
+  const startMs = Date.now();
+  const auditId = ulid();
 
-  logger.info('Inicio de procesamiento de traslado', { correlationId });
+  const writeAudit = async (status, extras = {}) => {
+    const processedAt = new Date().toISOString();
+    const record = {
+      id: auditId,
+      timestamp: processedAt,
+      messageId: extras.messageId ?? '',
+      status,
+      queueName: getQueueName(),
+      processingTimeMs: Date.now() - startMs,
+      receivedAt,
+      processedAt,
+      receiveCount: 1,
+    };
+    if (status === AUDIT_STATUS.FAILED && extras.payload !== undefined) {
+      record.payload = extras.payload;
+    }
+    if (extras.errorMessage) record.errorMessage = extras.errorMessage;
+    if (extras.errorStack) record.errorStack = extras.errorStack;
 
-  // Verificar modo mantenimiento
+    try {
+      await saveAuditRecord(record);
+    } catch (err) {
+      logger.error('Failed to save audit record', {
+        correlationId,
+        auditId,
+        errorMessage: err.message,
+      });
+    }
+  };
+
+  logger.info('Transfer processing started', { correlationId });
+
   if (process.env.MODO_MANTENIMIENTO === 'true') {
-    logger.warn('Sistema en modo mantenimiento', { correlationId });
+    logger.warn('System is under maintenance', { correlationId });
     return serviceUnavailableResponse();
   }
 
-  // Parsear el body
   let payload;
   try {
     const rawBody = event.body;
@@ -31,92 +67,75 @@ export const handler = async (event, context) => {
     }
     payload = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
   } catch {
-    logger.warn('Body del request no es JSON válido', { correlationId });
+    logger.warn('Request body is not valid JSON', { correlationId });
     return validationErrorResponse('El body debe ser JSON válido');
   }
 
-  // Extraer EPS destino del header
   const epsDestino = event.headers?.['x-eps-destino'] ?? event.headers?.['X-EPS-Destino'];
   if (!epsDestino) {
     return validationErrorResponse('El header X-EPS-Destino es requerido');
   }
 
-  // Extraer EPS origen
   const epsOrigen = event.requestContext?.authorizer?.epsId
     ?? event.headers?.['x-eps-origen']
-    ?? 'EPS_ORIGEN_NO_IDENTIFICADA';
+    ?? 'EPS_SOURCE_UNIDENTIFIED';
 
-  // Validar el Bundle FHIR R4
   const strictValidation = process.env.FHIR_STRICT_VALIDATION !== 'false';
   const validationResult = validateFhirBundle(payload);
 
   if (!validationResult.valid && strictValidation) {
-    logger.warn('Bundle FHIR inválido', {
+    logger.warn('Invalid FHIR Bundle received', {
       correlationId,
       epsOrigen,
-      errores: validationResult.errors,
+      errors: validationResult.errors,
     });
     return validationErrorResponse('Bundle FHIR R4 inválido', validationResult.errors);
   }
 
-  // Generar ID único del traslado
-  const trasladoId = ulid();
   const bundleMetadata = extractBundleMetadata(payload);
 
-  logger.info('Bundle FHIR validado, iniciando registro', {
+  logger.info('FHIR Bundle validated, starting registration', {
     correlationId,
-    trasladoId,
+    auditId,
     epsOrigen,
     epsDestino,
     patientId: bundleMetadata.patientId,
   });
 
   try {
-    // Guardar evidencia en S3
-    const { s3Key, payloadHash } = await saveEvidenceToS3(trasladoId, epsOrigen, payload);
-    logger.info('Evidencia guardada en S3', { correlationId, trasladoId, s3Key });
+    const { s3Key, payloadHash } = await saveEvidenceToS3(auditId, epsOrigen, payload);
+    logger.info('Evidence saved to S3', { correlationId, auditId, s3Key });
 
-    // Registrar en DynamoDB
-    await createTrasladoRecord({
-      trasladoId,
-      epsOrigen,
-      epsDestino,
-      patientId: bundleMetadata.patientId,
-      payloadHash,
-      s3EvidenceKey: s3Key,
-    });
-    logger.info('Traslado registrado en DynamoDB', { correlationId, trasladoId });
-
-    // Publicar en SQS
     const messageId = await publishTrasladoToQueue({
-      trasladoId,
+      trasladoId: auditId,
       epsOrigen,
       epsDestino,
       s3EvidenceKey: s3Key,
       payloadHash,
     });
 
-    // Actualizar estado a EN_COLA
-    await updateTrasladoEstado(trasladoId, TRASLADO_ESTADOS.EN_COLA, {
-      sqs_message_id: messageId,
-    });
+    await writeAudit(AUDIT_STATUS.IN_QUEUE, { messageId });
+    logger.info('Transfer successfully queued', { correlationId, auditId, messageId });
 
-    logger.info('Traslado encolado exitosamente', { correlationId, trasladoId, messageId });
-
-    // Responder a la EPS origen
     return successResponse({
-      traslado_id: trasladoId,
-      estado: TRASLADO_ESTADOS.EN_COLA,
-      mensaje: 'Historia clínica recibida y en proceso de entrega',
+      transfer_id: auditId,
+      status: AUDIT_STATUS.IN_QUEUE,
+      message: 'Historia clínica recibida y en proceso de entrega',
       timestamp: new Date().toISOString(),
     });
 
   } catch (error) {
-    logger.error('Error procesando traslado', {
+    logger.error('Error processing transfer', {
       correlationId,
-      trasladoId,
+      auditId,
       errorMessage: error.message,
       errorName: error.name,
+    });
+
+    await writeAudit(AUDIT_STATUS.FAILED, {
+      payload,
+      errorMessage: error.message,
+      errorStack: error.stack,
     });
 
     return internalErrorResponse(correlationId);
