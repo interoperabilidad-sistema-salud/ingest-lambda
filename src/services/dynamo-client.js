@@ -14,7 +14,6 @@ const dynamoClient = new DynamoDBClient({
 
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
-const TABLE_NAME = 'interop-sgsss-transfers-dev';
 
 export async function saveAuditRecord(record) {
   const item = {
@@ -34,7 +33,7 @@ export async function saveAuditRecord(record) {
   if (record.errorStack !== undefined) item.errorStack = record.errorStack;
 
   await docClient.send(new PutCommand({
-    TableName: TABLE_NAME,
+    TableName: process.env.DYNAMODB_TABLE_NAME,
     Item: item,
   }));
 
