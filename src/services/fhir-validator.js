@@ -51,11 +51,11 @@ export function extractBundleMetadata(bundle) {
   const patientId = patientEntry?.resource?.id ?? null;
 
   const compositionEntry = bundle.entry?.find((e) => e.resource?.resourceType === 'Composition');
-  const sourceEpsId = compositionEntry?.resource?.author?.[0]?.identifier?.value ?? null;
+  const epsOrigenId = compositionEntry?.resource?.author?.[0]?.identifier?.value ?? null;
 
   return {
     patientId,
-    sourceEpsId,
+    epsOrigenId,
     bundleTimestamp: bundle.timestamp ?? bundle.meta?.lastUpdated ?? new Date().toISOString(),
   };
 }
