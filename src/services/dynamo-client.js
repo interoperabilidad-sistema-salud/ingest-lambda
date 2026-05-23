@@ -18,7 +18,7 @@ const TABLE_NAME = 'interop-sgsss-transfers-dev';
 
 export async function saveAuditRecord(record) {
   const item = {
-    transfer_id: record.id,
+    transferId: record.id,
     timestamp: record.timestamp,
     messageId: record.messageId,
     status: record.status,
