@@ -19,7 +19,7 @@
     "@aws-sdk/client-s3": "^3.600.0",
     "@aws-sdk/client-sqs": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
-    "ulid": "^2.3.0"
+    "ulidx": "^2.4.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,6 +1,6 @@
-import { ulid } from 'ulid';
+import { ulid } from 'ulidx';
 import { validateFhirBundle, extractBundleMetadata } from '../services/fhir-validator.js';
-import { createTrasladoRecord, updateTrasladoEstado, TRASLADO_ESTADOS } from '../services/dynamo-client.js';
+import { saveAuditRecord, AUDIT_STATUS } from '../services/dynamo-client.js';
 import { saveEvidenceToS3 } from '../services/s3-client.js';
 import { publishTrasladoToQueue } from '../services/sqs-client.js';
 import { logger } from '../utils/logger.js';
@@ -11,18 +11,54 @@ import {
   serviceUnavailableResponse,
 } from '../utils/response-helper.js';
 
+const getQueueName = () => {
+  const url = process.env.SQS_DELIVERY_QUEUE_URL ?? '';
+  return url.split('/').filter(Boolean).pop() ?? '';
+};
+
 export const handler = async (event, context) => {
   const correlationId = context.awsRequestId;
+  const receivedAt = new Date().toISOString();
+  const startMs = Date.now();
+  const auditId = ulid();
+
+  const writeAudit = async (status, extras = {}) => {
+    const processedAt = new Date().toISOString();
+    const record = {
+      id: auditId,
+      timestamp: processedAt,
+      messageId: extras.messageId ?? '',
+      status,
+      queueName: getQueueName(),
+      processingTimeMs: Date.now() - startMs,
+      receivedAt,
+      processedAt,
+      receiveCount: 1,
+    };
+    if (status === AUDIT_STATUS.FAILED && extras.payload !== undefined) {
+      record.payload = extras.payload;
+    }
+    if (extras.errorMessage) record.errorMessage = extras.errorMessage;
+    if (extras.errorStack) record.errorStack = extras.errorStack;
+
+    try {
+      await saveAuditRecord(record);
+    } catch (err) {
+      logger.error('Failed to save audit record', {
+        correlationId,
+        auditId,
+        errorMessage: err.message,
+      });
+    }
+  };
 
   logger.info('Transfer processing started', { correlationId });
 
-  // Check maintenance mode
   if (process.env.MODO_MANTENIMIENTO === 'true') {
     logger.warn('System is under maintenance', { correlationId });
     return serviceUnavailableResponse();
   }
 
-  // Parse request body
   let payload;
   try {
     const rawBody = event.body;
@@ -35,18 +71,15 @@ export const handler = async (event, context) => {
     return validationErrorResponse('El body debe ser JSON válido');
   }
 
-  // Extract destination EPS from header
   const epsDestino = event.headers?.['x-eps-destino'] ?? event.headers?.['X-EPS-Destino'];
   if (!epsDestino) {
     return validationErrorResponse('El header X-EPS-Destino es requerido');
   }
 
-  // Extract source EPS
   const epsOrigen = event.requestContext?.authorizer?.epsId
     ?? event.headers?.['x-eps-origen']
     ?? 'EPS_SOURCE_UNIDENTIFIED';
 
-  // Validate FHIR R4 Bundle
   const strictValidation = process.env.FHIR_STRICT_VALIDATION !== 'false';
   const validationResult = validateFhirBundle(payload);
 
@@ -59,54 +92,34 @@ export const handler = async (event, context) => {
     return validationErrorResponse('Bundle FHIR R4 inválido', validationResult.errors);
   }
 
-  // Generate unique transfer ID
-  const trasladoId = ulid();
   const bundleMetadata = extractBundleMetadata(payload);
 
   logger.info('FHIR Bundle validated, starting registration', {
     correlationId,
-    trasladoId,
+    auditId,
     epsOrigen,
     epsDestino,
     patientId: bundleMetadata.patientId,
   });
 
   try {
-    // Save evidence to S3
-    const { s3Key, payloadHash } = await saveEvidenceToS3(trasladoId, epsOrigen, payload);
-    logger.info('Evidence saved to S3', { correlationId, trasladoId, s3Key });
+    const { s3Key, payloadHash } = await saveEvidenceToS3(auditId, epsOrigen, payload);
+    logger.info('Evidence saved to S3', { correlationId, auditId, s3Key });
 
-    // Register in DynamoDB
-    await createTrasladoRecord({
-      trasladoId,
-      epsOrigen,
-      epsDestino,
-      patientId: bundleMetadata.patientId,
-      payloadHash,
-      s3EvidenceKey: s3Key,
-    });
-    logger.info('Transfer registered in DynamoDB', { correlationId, trasladoId });
-
-    // Publish to SQS for async delivery
     const messageId = await publishTrasladoToQueue({
-      trasladoId,
+      trasladoId: auditId,
       epsOrigen,
       epsDestino,
       s3EvidenceKey: s3Key,
       payloadHash,
     });
 
-    // Update status to queued
-    await updateTrasladoEstado(trasladoId, TRASLADO_ESTADOS.EN_COLA, {
-      sqs_message_id: messageId,
-    });
+    await writeAudit(AUDIT_STATUS.IN_QUEUE, { messageId });
+    logger.info('Transfer successfully queued', { correlationId, auditId, messageId });
 
-    logger.info('Transfer successfully queued', { correlationId, trasladoId, messageId });
-
-    // Respond to source EPS
     return successResponse({
-      transfer_id: trasladoId,
-      status: TRASLADO_ESTADOS.EN_COLA,
+      transfer_id: auditId,
+      status: AUDIT_STATUS.IN_QUEUE,
       message: 'Historia clínica recibida y en proceso de entrega',
       timestamp: new Date().toISOString(),
     });
@@ -114,9 +127,15 @@ export const handler = async (event, context) => {
   } catch (error) {
     logger.error('Error processing transfer', {
       correlationId,
-      trasladoId,
+      auditId,
       errorMessage: error.message,
       errorName: error.name,
+    });
+
+    await writeAudit(AUDIT_STATUS.FAILED, {
+      payload,
+      errorMessage: error.message,
+      errorStack: error.stack,
     });
 
     return internalErrorResponse(correlationId);

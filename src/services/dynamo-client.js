@@ -1,11 +1,11 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 
-export const TRASLADO_ESTADOS = {
-  RECIBIDO: 'RECIBIDO',
-  EN_COLA: 'EN_COLA',
-  ENTREGADO: 'ENTREGADO',
-  FALLIDO: 'FALLIDO',
+export const AUDIT_STATUS = {
+  RECEIVED: 'RECEIVED',
+  IN_QUEUE: 'IN_QUEUE',
+  DELIVERED: 'DELIVERED',
+  FAILED: 'FAILED',
 };
 
 const dynamoClient = new DynamoDBClient({
@@ -14,62 +14,29 @@ const dynamoClient = new DynamoDBClient({
 
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
-const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME;
+const TABLE_NAME = 'interop-sgsss-transfers-dev';
 
-export async function createTrasladoRecord({
-  trasladoId,
-  epsOrigen,
-  epsDestino,
-  patientId,
-  payloadHash,
-  s3EvidenceKey,
-}) {
-  const timestamp = new Date().toISOString();
-
+export async function saveAuditRecord(record) {
   const item = {
-    traslado_id: trasladoId,
-    estado: TRASLADO_ESTADOS.RECIBIDO,
-    eps_origen: epsOrigen,
-    eps_destino: epsDestino,
-    patient_id: patientId,
-    payload_hash: payloadHash,
-    s3_evidence_key: s3EvidenceKey,
-    created_at: timestamp,
-    updated_at: timestamp,
-    schema_version: '1.0',
-    ttl: Math.floor(Date.now() / 1000) + (10 * 365 * 24 * 3600),
+    transfer_id: record.id,
+    timestamp: record.timestamp,
+    messageId: record.messageId,
+    status: record.status,
+    queueName: record.queueName,
+    processingTimeMs: record.processingTimeMs,
+    receivedAt: record.receivedAt,
+    processedAt: record.processedAt,
+    receiveCount: record.receiveCount,
   };
+
+  if (record.payload !== undefined) item.payload = record.payload;
+  if (record.errorMessage !== undefined) item.errorMessage = record.errorMessage;
+  if (record.errorStack !== undefined) item.errorStack = record.errorStack;
 
   await docClient.send(new PutCommand({
     TableName: TABLE_NAME,
     Item: item,
-    ConditionExpression: 'attribute_not_exists(traslado_id)',
   }));
 
   return item;
-}
-
-export async function updateTrasladoEstado(trasladoId, nuevoEstado, extras = {}) {
-  const timestamp = new Date().toISOString();
-
-  const updateParts = ['#estado = :estado', 'updated_at = :updated'];
-  const expressionValues = {
-    ':estado': nuevoEstado,
-    ':updated': timestamp,
-  };
-  const expressionNames = { '#estado': 'estado' };
-
-  Object.entries(extras).forEach(([key, value], index) => {
-    updateParts.push(`#extra${index} = :extra${index}`);
-    expressionNames[`#extra${index}`] = key;
-    expressionValues[`:extra${index}`] = value;
-  });
-
-  await docClient.send(new UpdateCommand({
-    TableName: TABLE_NAME,
-    Key: { transfersid: trasladoId },
-    UpdateExpression: `SET ${updateParts.join(', ')}`,
-    ExpressionAttributeNames: expressionNames,
-    ExpressionAttributeValues: expressionValues,
-  }));
 }

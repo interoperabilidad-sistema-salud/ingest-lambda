@@ -7,13 +7,12 @@ jest.unstable_mockModule('../../src/services/fhir-validator.js', () => ({
 }));
 
 jest.unstable_mockModule('../../src/services/dynamo-client.js', () => ({
-  createTrasladoRecord: jest.fn(),
-  updateTrasladoEstado: jest.fn(),
-  TRASLADO_ESTADOS: {
-    RECIBIDO: 'RECIBIDO',
-    EN_COLA: 'EN_COLA',
-    ENTREGADO: 'ENTREGADO',
-    FALLIDO: 'FALLIDO',
+  saveAuditRecord: jest.fn(),
+  AUDIT_STATUS: {
+    RECEIVED: 'RECEIVED',
+    IN_QUEUE: 'IN_QUEUE',
+    DELIVERED: 'DELIVERED',
+    FAILED: 'FAILED',
   },
 }));
 
@@ -51,8 +50,7 @@ describe('Lambda Ingest — handler', () => {
   let validateFhirBundle;
   let extractBundleMetadata;
   let saveEvidenceToS3;
-  let createTrasladoRecord;
-  let updateTrasladoEstado;
+  let saveAuditRecord;
   let publishTrasladoToQueue;
 
   beforeEach(async () => {
@@ -67,16 +65,14 @@ describe('Lambda Ingest — handler', () => {
     validateFhirBundle = validatorModule.validateFhirBundle;
     extractBundleMetadata = validatorModule.extractBundleMetadata;
     saveEvidenceToS3 = s3Module.saveEvidenceToS3;
-    createTrasladoRecord = dynamoModule.createTrasladoRecord;
-    updateTrasladoEstado = dynamoModule.updateTrasladoEstado;
+    saveAuditRecord = dynamoModule.saveAuditRecord;
     publishTrasladoToQueue = sqsModule.publishTrasladoToQueue;
 
     // Configura los mocks con respuestas exitosas por defecto
     validateFhirBundle.mockReturnValue({ valid: true, errors: [] });
     extractBundleMetadata.mockReturnValue({ patientId: 'p-123', epsOrigenId: 'EPS001' });
     saveEvidenceToS3.mockResolvedValue({ s3Key: 'traslados/EPS001/2026/04/test.json', payloadHash: 'abc123' });
-    createTrasladoRecord.mockResolvedValue({});
-    updateTrasladoEstado.mockResolvedValue({});
+    saveAuditRecord.mockResolvedValue({});
     publishTrasladoToQueue.mockResolvedValue('sqs-msg-id-456');
   });
 
@@ -86,7 +82,7 @@ describe('Lambda Ingest — handler', () => {
     expect(response.statusCode).toBe(202);
     const body = JSON.parse(response.body);
     console.log(body);
-    expect(body.status).toBe('EN_COLA');
+    expect(body.status).toBe('IN_QUEUE');
     expect(body.transfer_id).toBeDefined();
   });
 
